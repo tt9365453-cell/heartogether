@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Athena Music Room</title>
+<style>
+body { background:#050505; color:#00ffff; font-family:Poppins,sans-serif; text-align:center; padding:20px; }
+input,button,select{padding:8px;margin:5px;border-radius:5px;border:none;font-size:14px;}
+input,select{background:#0f0f0f;color:#00ffff;}
+button{background:#00ffff;color:#000;cursor:pointer;}
+audio{width:90%;margin-top:20px;}
+.neon-box{border:1px solid #00ffff;padding:15px;border-radius:10px;margin-top:20px;box-shadow:0 0 10px #00ffff;}
+#chatBox{width:90%;max-height:150px;overflow-y:auto;background:#0f0f0f;margin:10px auto;padding:5px;border-radius:5px;text-align:left;}
+.footer{margin-top:30px;font-size:14px;color:#00ffff;text-shadow:0 0 5px #00ffff,0 0 10px #00ffff,0 0 20px #00ffff;}
+</style>
+</head>
+<body>
+
+<h2>🎧 Athena Music Room</h2>
+
+<div class="neon-box" id="nameBox">
+  <input type="text" id="userName" placeholder="Masukkan nama kamu">
+  <button onclick="enterRoom()">Masuk</button>
+</div>
+
+<div class="neon-box" id="roomBox" style="display:none;">
+  <input type="text" id="roomCode" placeholder="Kode Room">
+  <button onclick="createRoom()">Buat Room</button>
+  <button onclick="joinRoom()">Join Room</button>
+</div>
+
+<div id="status"></div>
+
+<div class="neon-box" id="playerBox" style="display:none;">
+  <select id="songSelect" onchange="changeSong()">
+    <option value="songs/upbeat-party.mp3">Upbeat Party</option>
+    <option value="songs/corporate-fitness.mp3">Corporate Fitness</option>
+    <option value="songs/motivational-upbeat.mp3">Motivational Upbeat</option>
+  </select>
+  <audio id="player" controls></audio>
+  
+  <!-- Upload MP3 untuk host -->
+  <div id="uploadBox" style="display:none; margin-top:10px;">
+    <input type="file" id="mp3Upload" accept=".mp3">
+    <button onclick="uploadSong()">Upload Lagu</button>
+  </div>
+
+  <!-- Link publik untuk host -->
+  <div id="linkBox" style="margin-top:10px; display:none;">
+    <input type="text" id="songURL" placeholder="Masukkan link lagu MP3 publik">
+    <button onclick="setSongLink()">Set Lagu</button>
+  </div>
+</div>
+
+<div class="neon-box" id="chatContainer" style="display:none;">
+  <div id="chatBox"></div>
+  <input type="text" id="chatInput" placeholder="Tulis pesan..." onkeydown="if(event.key==='Enter') sendMessage()">
+  <button onclick="sendMessage()">Kirim</button>
+</div>
+
+<p id="roomInfo"></p>
+<p class="footer">by Athena</p>
+
+<!-- Firebase SDK pakai import classic supaya jalan di GitHub Pages -->
+<script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-database.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.4/firebase-storage.js"></script>
+
+<script>
+const firebaseConfig = {
+  apiKey: "AIzaSyCLoNK8eyjhVQMEEb-I0nJ5tvF-Ux7rV50",
+  authDomain: "tester-318ce.firebaseapp.com",
+  databaseURL: "https://tester-318ce-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "tester-318ce",
+  storageBucket: "tester-318ce.appspot.com",
+  messagingSenderId: "462868756407",
+  appId: "1:462868756407:web:693fe28da8f1b314b31a32",
+  measurementId: "G-XRCYJSQNBY"
+};
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+const storage = firebase.storage();
+
+const audio = document.getElementById("player");
+const chatBox = document.getElementById("chatBox");
+let currentRoom = null;
+let isHost = false;
+let userName = '';
+
+// ================= Room Flow =================
+function generateCode(){ return Math.random().toString(36).substring(2,7).toUpperCase(); }
+
+function enterRoom(){
+  const nameInput = document.getElementById("userName").value.trim();
+  if(!nameInput) return alert("Isi nama dulu!");
+  userName = nameInput;
+  document.getElementById("nameBox").style.display="none";
+  document.getElementById("roomBox").style.display="block";
+  audio.play().catch(()=>{});
+  audio.pause();
+}
+
+async function createRoom(){
+  const code = generateCode();
+  const songUrl = document.getElementById("songSelect").value;
+  await db.ref('rooms/'+code).set({
+    currentTime:0,
+    isPlaying:false,
+    members:1,
+    currentSong:songUrl,
+    chat:{}
+  });
+  currentRoom = code;
+  isHost = true;
+  document.getElementById("status").innerHTML=`Room dibuat: <b>${code}</b>`;
+  openPlayer();
+  listenRoom(code);
+  document.getElementById("uploadBox").style.display="block";
+  document.getElementById("linkBox").style.display="block";
+}
+
+async function joinRoom(){
+  const code = document.getElementById("roomCode").value.trim().toUpperCase();
+  const snap = await db.ref('rooms/'+code).get();
+  if(!snap.exists()) return alert("Room tidak ditemukan!");
+  const data = snap.val();
+  if(data.members>=5) return alert("Room penuh (max 5 orang)!");
+  await db.ref('rooms/'+code).update({members:data.members+1});
+  currentRoom = code;
+  isHost = false;
+  document.getElementById("status").innerHTML=`Berhasil join room: <b>${code}</b>`;
+  openPlayer();
+  listenRoom(code);
+}
+
+// ================= Audio Flow =================
+function openPlayer(){
+  document.getElementById("playerBox").style.display="block";
+  document.getElementById("chatContainer").style.display="block";
+  audio.src = document.getElementById("songSelect").value;
+}
+
+function changeSong(){
+  const newSong = document.getElementById("songSelect").value;
+  if(isHost && currentRoom){
+    db.ref('rooms/'+currentRoom).update({currentSong:newSong,currentTime:0,isPlaying:false});
+  } else {
+    audio.src = newSong;
+  }
+}
+
+// ================= Chat =================
+async function sendMessage(){
+  const text = document.getElementById("chatInput").value.trim();
+  if(!text || !currentRoom) return;
+  const msgRef = db.ref('rooms/'+currentRoom+'/chat').push();
+  await msgRef.set({name:userName,text:text});
+  document.getElementById("chatInput").value='';
+}
+window.sendMessage = sendMessage;
+
+// ================= Listen Room =================
+function listenRoom(code){
+  db.ref('rooms/'+code).on('value',snapshot=>{
+    const data = snapshot.val();
+    if(!data) return;
+    if(!isHost){
+      if(audio.src!==data.currentSong) audio.src=data.currentSong;
+      if(data.isPlaying){
+        if(Math.abs(audio.currentTime-data.currentTime)>0.5) audio.currentTime=data.currentTime;
+        audio.play().catch(()=>{});
+      } else audio.pause();
+    }
+    chatBox.innerHTML='';
+    if(data.chat){
+      Object.values(data.chat).forEach(msg=>{
+        const p = document.createElement("p");
+        p.innerHTML=`<b>${msg.name}:</b> ${msg.text}`;
+        chatBox.appendChild(p);
+      });
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
+    document.getElementById("roomInfo").innerHTML=`👥 Member: ${data.members}/5 | ⏱️ ${Math.floor(data.currentTime)}s`;
+    document.getElementById("songSelect").value=data.currentSong;
+  });
+}
+
+// ================= Audio Sync =================
+audio.addEventListener("play", ()=>{
+  if(isHost && currentRoom) db.ref('rooms/'+currentRoom).update({isPlaying:true,currentTime:audio.currentTime});
+});
+audio.addEventListener("pause", ()=>{
+  if(isHost && currentRoom) db.ref('rooms/'+currentRoom).update({isPlaying:false});
+});
+setInterval(()=>{
+  if(isHost && currentRoom && !audio.paused) db.ref('rooms/'+currentRoom).update({currentTime:audio.currentTime});
+},1500);
+
+// ================= Upload MP3 =================
+async function uploadSong(){
+  const fileInput = document.getElementById("mp3Upload");
+  if(fileInput.files.length === 0) return alert("Pilih file MP3!");
+  const file = fileInput.files[0];
+
+  const songRef = storage.ref(`rooms/${currentRoom}/${file.name}`);
+  await songRef.put(file);
+  const url = await songRef.getDownloadURL();
+
+  await db.ref('rooms/'+currentRoom).update({
+    currentSong:url,
+    currentTime:0,
+    isPlaying:false
+  });
+
+  audio.src = url;
+  audio.play().catch(()=>{});
+  alert("Lagu berhasil diupload dan sinkron ke semua member!");
+  fileInput.value="";
+}
+window.uploadSong = uploadSong;
+
+// ================= Set Lagu dari Link Publik =================
+async function setSongLink(){
+  const url = document.getElementById("songURL").value.trim();
+  if(!url) return alert("Masukkan link dulu!");
+  if(!currentRoom) return alert("Room belum dibuat/terhubung!");
+
+  await db.ref('rooms/'+currentRoom).update({
+    currentSong: url,
+    currentTime: 0,
+    isPlaying: false
+  });
+
+  audio.src = url;
+  audio.play().catch(()=>{});
+  document.getElementById("songURL").value = "";
+  alert("Lagu berhasil diset dari link publik!");
+}
+window.setSongLink = setSongLink;
+</script>
+</body>
+</html>
